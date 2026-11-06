@@ -66,7 +66,7 @@ async function sourceCodeFiles(dir) {
   const nested = await Promise.all(entries.map(async entry => {
     const rel = path.join(dir, entry.name);
     if (entry.isDirectory()) return sourceCodeFiles(rel);
-    return /\\.(?:mjs|js)$/.test(entry.name) ? [rel] : [];
+    return /\.(?:mjs|js)$/.test(entry.name) ? [rel] : [];
   }));
   return nested.flat();
 }
@@ -79,6 +79,6 @@ test('troubleshooting error codes exist in the implementation', async () => {
     ...(await sourceCodeFiles('plugin')),
     'server.mjs', 'cli.mjs', 'mcp.mjs',
   ];
-  const implementation = (await Promise.all(files.map(read))).join('\\n');
+  const implementation = (await Promise.all(files.map(read))).join('\n');
   for (const code of codes) assert.ok(implementation.includes(code), `troubleshooting code has no implementation: ${code}`);
 });
