@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- CLI: `studio auto-edit` and `studio fit-duration` now work with hyphens, and an unknown tool name lists the tools and suggests a close match (#101).
+
 ## 0.12.0 — captions, chapters and a friendlier CLI
 
 Better subtitles in and out, chapters inside the MP4, exact NTSC frame rates and a CLI that explains itself. 59 tools, nothing removed.
