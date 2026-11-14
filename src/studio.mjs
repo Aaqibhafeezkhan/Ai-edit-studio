@@ -26,7 +26,7 @@ import { listBrands, saveBrand, getBrand, readBrandSnapshot, brandOptions, brand
 import { findClips } from './clips.mjs';
 import { fitDuration, searchProject, assembleFromScript, multicamPlan, exportTimeline } from './longform.mjs';
 import { syncSources } from './sync.mjs';
-import { sectionSpans } from '../public/edit-ops.js';
+import { sectionSpans, suggestSections, oneSectionPerShot } from '../public/edit-ops.js';
 import { qcFile } from './qc.mjs';
 import { compileStory, storySummary, renderGeneratedScene } from './story.mjs';
 import { composeToFile, styleList, MOODS, MUSIC_ENGINE_VERSION, providerStatus, saveProviderKey, providerPrompt, elevenLabsCompose } from './music/index.mjs';
@@ -87,6 +87,8 @@ export async function getProject(id) {
   try { record = await readJson(path.join(folder(id), 'project.json')); }
   catch { throw new StudioError('PROJECT_NOT_FOUND', 'Project not found.'); }
   if (record.id !== id || record.schemaVersion !== 2) throw new StudioError('PROJECT_INVALID', 'Invalid project file.');
+  // A project saved with two sections on one shot (possible before #138) still opens: the last one wins.
+  if (Array.isArray(record.options?.sections)) record.options.sections = oneSectionPerShot(record.options.sections);
   record.options = normalizeOptions(record.options);
   // Plans saved before Director 0.4 have no stable clip ids; add them in memory.
   if (record.plan?.clips?.some(c => !c.id)) { try { record.plan = { ...record.plan, ...validateClips(record.plan.clips, record.sources), style: record.plan.style }; } catch { /* keep legacy plan untouched */ } }
@@ -1348,12 +1350,7 @@ export async function sectionsProject(id, request = {}) {
     const spans = sectionsOf(project);
     const out = { revision: project.revision, sections: spans.map(({ startIndex, endIndex, clipIds, ...x }) => ({ ...x, clips: clipIds.length, firstClip: clipIds[0] })) };
     if (action === 'suggest' || !spans.length) {
-      // Proposals: labelled markers, else every change of recording, else every ~2 minutes at a cut.
-      const rows = layout(project.plan?.clips ?? []), proposals = [];
-      for (const m of (project.options.markers ?? []).filter(m => m.label)) { const r = rows.find(x => x.visibleEnd > m.time); if (r && !proposals.some(p => p.clip === r.id)) proposals.push({ name: m.label, clip: r.id, at: Math.round(r.visibleStart * 10) / 10 }); }
-      if (!proposals.length) rows.forEach((r, i) => { if (!i || r.sourceIndex !== rows[i - 1].sourceIndex) proposals.push({ name: `Part ${proposals.length + 1} · ${project.sources[r.sourceIndex]?.name ?? ''}`.slice(0, 60), clip: r.id, at: Math.round(r.visibleStart * 10) / 10 }); });
-      if (proposals.length < 2) { let next = 0; for (const r of rows) if (r.visibleStart >= next) { proposals.push({ name: `Part ${proposals.length + 1}`, clip: r.id, at: Math.round(r.visibleStart * 10) / 10 }); next = r.visibleStart + 120; } }
-      out.suggestions = proposals.slice(0, 30);
+      out.suggestions = suggestSections(project.plan?.clips ?? [], { markers: project.options.markers ?? [], sources: project.sources });
     }
     return out;
   }
