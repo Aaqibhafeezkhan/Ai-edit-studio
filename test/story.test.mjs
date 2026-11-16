@@ -77,6 +77,28 @@ test('mistakes are refused or warned in plain words', () => {
   assert.ok(readSeconds('one two') > 0.8);
 });
 
+test('a key the story format does not know is a warning with the nearest name (#106)', () => {
+  const c = compileStory(base({
+    bpm: 90,
+    music: { bpm: 140 },
+    muisc: { bpm: 140 },
+    style: { accent: '#8db4ee', accnt: '#f0b544' },
+    scenes: [scene('a', { lnes: ['Typo line'] })],
+    drops: [],
+    sfx: [],
+  }));
+  const messages = c.warnings.filter(w => w.code === 'UNKNOWN_KEY').map(w => w.message).sort();
+  assert.deepEqual(messages, [
+    'Scene a: unknown key "lnes"; did you mean lines?',
+    'story: unknown key "bpm"; did you mean music.bpm?',
+    'story: unknown key "muisc"; did you mean music?',
+    'style: unknown key "accnt"; did you mean accent?',
+  ]);
+  assert.equal(c.bpm, 140, 'the tempo comes from music.bpm; the top-level one is ignored, which the warning says');
+  assert.deepEqual(compileStory(base()).warnings.filter(w => w.code === 'UNKNOWN_KEY'), [],
+    'every key of the guide example is known');
+});
+
 test('studio_guide and studio_apply dryRun work without a running server', async () => {
   assert.ok(agentTools.find(t => t.name === 'studio_apply') && agentTools.find(t => t.name === 'studio_guide'));
   assert.equal((await callAgentTool('studio_guide', { topic: 'story' })).example.version, 'aes.story/1');

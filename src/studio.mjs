@@ -2006,24 +2006,45 @@ export async function storyApply(request = {}) {
     return publicBuild(build);
   }
   const c = compileStory(request.story);
+  // A story names files; check them before either path does anything, so a dry run fails where the build would (#106).
+  const footageFiles = await checkStoryFiles(c);
   if (request.dryRun) return { dryRun: true, ...storySummary(c), note: 'Nothing was rendered. Fix warnings, then run again without dryRun; poll the returned buildId with studio_apply {action:"status", buildId}.' };
   if ([...storyBuilds.values()].some(b => b.status === 'building')) throw new StudioError('ENGINE_BUSY', 'A story is already being built. Poll it with studio_apply {action:"status", buildId}.');
   const build = { id: randomUUID(), status: 'building', progress: 0, message: 'Starting', startedAt: new Date().toISOString() };
   storyBuilds.set(build.id, build);
   while (storyBuilds.size > 20) storyBuilds.delete(storyBuilds.keys().next().value);
-  runStoryBuild(build, c, request).then(result => { build.result = result; build.status = 'done'; build.progress = 1; build.message = 'Ready'; })
+  runStoryBuild(build, c, request, footageFiles).then(result => { build.result = result; build.status = 'done'; build.progress = 1; build.message = 'Ready'; })
     .catch(e => { build.status = 'failed'; build.error = { code: e.code ?? 'STORY_FAILED', message: e.message }; build.message = e.message; });
   return publicBuild(build);
 }
 
-async function runStoryBuild(build, c, request) {
+/**
+ * The files a story names, checked the way the build checks them: each footage file exists and is allowed, the
+ * source range fits the clip, and music.file exists. Returns the footage file per scene index.
+ */
+async function checkStoryFiles(c) {
+  const files = new Map();
+  for (const [i, scene] of c.scenes.entries()) {
+    if (scene.kind !== 'footage') continue;
+    const file = (await checkedFile(scene.source, MEDIA_EXTENSIONS, 20 * 1024 ** 3)).file;
+    const { duration } = await probeMedia(file);
+    const speed = scene.speed ?? 1, start = Math.max(0, scene.start - scene.transitionSeconds * speed);
+    const end = start + scene.clipSeconds * speed;
+    if (end > duration + 0.001) throw new StudioError('INVALID_STORY', `Scene ${scene.id}: ${path.basename(scene.source)} is ${Math.round(duration * 100) / 100} s long; the scene needs source time up to ${Math.round(end * 100) / 100} s.`);
+    files.set(i, file);
+  }
+  if (c.music.file) await checkedFile(c.music.file, ['.wav', '.mp3', '.ogg', '.m4a', '.flac'], 500 * 1024 ** 2);
+  return files;
+}
+
+async function runStoryBuild(build, c, request, footageFiles = new Map()) {
   await ensureDataRoot(2 * 1024 ** 3);
   const tools = findFfmpegTools(), dir = path.join(ROOT, 'story-cache');
   const files = [];
   let reused = 0;
   for (const [i, scene] of c.scenes.entries()) {
     build.message = `Scene ${i + 1}/${c.scenes.length}: ${scene.id}`; build.progress = i / (c.scenes.length + 2);
-    if (scene.kind === 'footage') { files.push((await checkedFile(scene.source, MEDIA_EXTENSIONS, 20 * 1024 ** 3)).file); continue; }
+    if (scene.kind === 'footage') { files.push(footageFiles.get(i) ?? (await checkedFile(scene.source, MEDIA_EXTENSIONS, 20 * 1024 ** 3)).file); continue; }
     if (scene.logo) scene.logo = (await checkedFile(scene.logo, ['.png', '.jpg', '.jpeg'], 16 * 1024 ** 2)).file;
     const r = await renderGeneratedScene(c, scene, dir, { ffmpeg: tools.ffmpeg });
     if (r.reused) reused++;
