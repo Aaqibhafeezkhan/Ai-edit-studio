@@ -2,7 +2,7 @@
 // AI Edit Studio — Director 0.4 editor. One state model; the DOM is a view.
 import { EditHistory } from './edit-history.js';
 import { t, LANG, LOCALE, applyLanguage } from './i18n.js';
-import { parseSrt, mapCaptions } from './captions.js';
+import { parseSrt, parseVtt, mapCaptions } from './captions.js';
 import { applyOperations, coreClips, diffEdits, layout, totalDuration, clipAt, editPoints, unusedRanges, formatTime, LIMITS, newClipId, TRANSITIONS, COLOR_DEFAULTS } from './edit-ops.js';
 import { reviewEdit } from './insights.js';
 import { Timeline } from './timeline.js';
@@ -1027,9 +1027,10 @@ function bindChrome() {
   $('caption-picker').onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
     try {
-      if (file.size > 128 * 1024) throw new Error(t('SRT is too large (max. 128 KiB).'));
-      const i = Number($('caption-source').value), cues = parseSrt(await file.text(), i);
-      if (cues.some(c => c.end > sources()[i].duration + 0.05)) throw new Error(t('Use an SRT with the timing of this original source file.'));
+      if (file.size > 128 * 1024) throw new Error(t('The caption file is too large (max. 128 KiB).'));
+      const i = Number($('caption-source').value), text = await file.text();
+      const cues = /\.vtt$/i.test(file.name) ? parseVtt(text, i) : parseSrt(text, i);
+      if (cues.some(c => c.end > sources()[i].duration + 0.05)) throw new Error(t('Use an SRT or VTT with the timing of this original source file.'));
       edit([{ op: 'set_options', options: { captions: [...(state.options.captions ?? []).filter(c => c.sourceIndex !== i), ...cues] } }], t('{n} captions', { n: cues.length }));
       switchTab('right', 'text');
     } catch (err) { toast(err.message); } finally { e.target.value = ''; }

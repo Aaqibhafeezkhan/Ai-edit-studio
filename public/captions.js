@@ -53,6 +53,14 @@ export function parseSrt(text, sourceIndex = 0) {
   if (blocks.length && !cues.length) throw new Error('SRT has no captions.');
   return normalizeCaptions(cues);
 }
+/** WebVTT as captions: the cues parseVttCues() reads, held to the same caption limits parseSrt() applies. */
+export function parseVtt(text, sourceIndex = 0) {
+  if (text.length > 128 * 1024) throw new Error('VTT is too large (at most 128 KiB).');
+  const clean = text.replace(/^\uFEFF/, '');
+  const cues = parseVttCues(clean, sourceIndex);
+  if (srtBlocks(clean).length && !cues.length) throw new Error('VTT has no captions.');
+  return normalizeCaptions(cues);
+}
 /** Transcript cues: the same SRT shape without the caption limits — a talk has thousands of
  * cues, and importTranscript already caps the file at 32 MiB. */
 export function parseSrtCues(text, sourceIndex = 0) {
