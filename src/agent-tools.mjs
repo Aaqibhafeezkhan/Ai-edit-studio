@@ -59,7 +59,7 @@ const operation = object({
   times: { type: 'array', maxItems: 2000, items: number(0, T) },
   options, time: number(0, T), color: choice(['yellow', 'red', 'green', 'blue']),
 }, ['op']);
-const OPERATION_GUIDE = {
+export const OPERATION_GUIDE = {
   split: '{op:"split", at:<timeline s>} or {op:"split", clip, sourceTime}',
   delete: '{op:"delete", clip} or {op:"delete", clips:[...]} — ripple delete, the timeline closes the gap',
   delete_range: '{op:"delete_range", from:<timeline s>, to:<timeline s>} — remove a span across clips',
@@ -80,7 +80,7 @@ const OPERATION_GUIDE = {
   speed_ramp: '{op:"speed_ramp", clip, from:1, to:0.5, steps:4} — stepped speed ramp (the shot is split into steps with interpolated speed)',
   add_overlay: '{op:"add_overlay", sourceIndex, start, end (SOURCE s), at (TIMELINE s), mode:"full"|"pip", position?:"top-right"|…, size?:0.32, gain?:0, fade?} — B-roll cutaway over the edit (main sound continues) or picture-in-picture',
   update_overlay: '{op:"update_overlay", index, ...fields}', remove_overlay: '{op:"remove_overlay", index}',
-  add_text: '{op:"add_text", start, end?, text, style?:"title"|"lower"|"big"|"note", position?:"center"|"low"|"high"|"left-low"|"left-high"} — on-screen text in TIMELINE seconds (title cards, lower thirds); not captions',
+  add_text: '{op:"add_text", start, end?, text, style?:"title"|"lower"|"big"|"note"|"callout", position?:"center"|"low"|"high"|"left-low"|"left-high"} — on-screen text in TIMELINE seconds (title cards, lower thirds); not captions',
   update_text: '{op:"update_text", index, ...fields}', remove_text: '{op:"remove_text", index}',
 };
 const spec = (name, description, inputSchema, readOnly = false) => ({ name: `studio_${name}`, description, inputSchema,
@@ -99,7 +99,7 @@ export const agentTools = [
   spec('create', 'Create a local project from absolute video paths, without copying or modifying originals. Optional template id from studio_schema. Set label/endTitle empty for non-game content.', object({ name: string(100), inputs: { type: 'array', items: string(), minItems: 1, maxItems: LIMITS.sources }, template: string(40), options }, ['name', 'inputs'])),
   spec('analyze', 'Start local scene/motion/audio analysis and replace the edit proposal. Returns immediately; poll get until ready/failed. Review the clips before export.', object({ projectId, revision }, ['projectId', 'revision'])),
   spec('plan', 'Replace edit proposal using current options and existing analysis. Does not render. finaleSeconds protects the continuous final shot.', object({ projectId, revision }, ['projectId', 'revision'])),
-  spec('edit', 'PREFERRED way to change an edit. Atomic batch of operations (split, delete, delete_range, move, move_block, swap, trim, trim_to, slip, insert, set, replace, beat_sync, set_options, add_marker, remove_marker) with revision guard. All-or-nothing; errors name the failing operation. dryRun:true returns diff, review score and resulting timeline without saving. Reference clips by id; ids survive reorders, indices do not.', object({ projectId, revision, operations: { type: 'array', items: operation, minItems: 1, maxItems: 100 }, dryRun: bool, summary, author: string(40) }, ['projectId', 'revision', 'operations'])),
+  spec('edit', 'PREFERRED way to change an edit. Atomic batch of operations with revision guard; see studio_schema for the complete supported operation list and argument guide. All-or-nothing; errors name the failing operation. dryRun:true returns diff, review score and resulting timeline without saving. Reference clips by id; ids survive reorders, indices do not.', object({ projectId, revision, operations: { type: 'array', items: operation, minItems: 1, maxItems: 100 }, dryRun: bool, summary, author: string(40) }, ['projectId', 'revision', 'operations'])),
   spec('silence', 'Read-only silence-cut proposal from analyzed RMS levels. Not speech/filler detection. Does not save. Listen before applying returned plan.clips with update; strip derived clip fields first.', object({ projectId, revision, thresholdDb: number(-70, -20), minSilence: number(1, 10) }, ['projectId', 'revision']), true),
   spec('update', 'Update project with revision guard. Options merge with saved options; clips replace the whole edit. Prefer studio_edit for targeted changes. Captions use original SOURCE time and follow trims, reorder and speed. Never guess speech.', object({ projectId, revision, options, clips: { type: 'array', items: clip, minItems: 1, maxItems: LIMITS.clips }, summary, author: string(40) }, ['projectId', 'revision'])),
   spec('history', 'Revision history with author (editor/agent/engine) and summaries. Read only.', object({ projectId }, ['projectId']), true),
