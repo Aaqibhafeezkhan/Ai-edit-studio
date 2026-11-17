@@ -16,7 +16,7 @@ import { applyOperations, coreClips, diffEdits, EditError, LIMITS, layout } from
 import { analyzeMusicFile, timelineBeats } from './beats.mjs';
 import { reviewEdit, describeTimeline, curvesFor, highlights as findHighlights, hookScore } from '../public/insights.js';
 import { templateOptions } from './templates.mjs';
-import { parseSrt, parseSrtCues, parseVttCues } from '../public/captions.js';
+import { parseSrt, parseSrtCues, parseVtt, parseVttCues } from '../public/captions.js';
 import { buildAutoEdit, PLATFORMS } from './autoedit.mjs';
 import { transcribeFile, speechStatus, parseWhisperJson } from './transcribe.mjs';
 import { normalizeWords, wordsFromSegments, findFillers, wordRanges, findPauses, matchPhrase, wordsInEdit, captionsFromEdit, transcriptText } from '../public/transcript.js';
@@ -790,10 +790,10 @@ export async function importCaptionsFile(id, request = {}) {
   const project = await getProject(id);
   const index = Number(request.sourceIndex ?? 0);
   if (!project.sources[index]) throw new StudioError('INVALID_CAPTIONS', 'Unknown source index.');
-  const file = await checkedFile(String(request.file ?? ''), ['.srt', '.txt'], 2 * 1024 ** 2);
+  const file = await checkedFile(String(request.file ?? ''), ['.srt', '.vtt', '.txt'], 2 * 1024 ** 2);
   const text = await fs.readFile(file.file, 'utf8');
   let cues;
-  try { cues = parseSrt(text, index); } catch (e) { throw new StudioError('INVALID_CAPTIONS', e.message); }
+  try { cues = /\.vtt$/i.test(file.file) ? parseVtt(text, index) : parseSrt(text, index); } catch (e) { throw new StudioError('INVALID_CAPTIONS', e.message); }
   const offset = Number(request.offset ?? 0) || 0;
   if (offset) cues = cues.map(c => ({ ...c, start: Math.max(0, c.start + offset), end: Math.max(0.1, c.end + offset) }));
   const kept = request.replace === false ? (project.options.captions ?? []) : (project.options.captions ?? []).filter(c => c.sourceIndex !== index);

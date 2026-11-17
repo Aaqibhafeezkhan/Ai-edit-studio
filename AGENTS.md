@@ -190,7 +190,7 @@ and can make A/B projects with the other hooks (`variants:true`). Every step is 
    `square720`, `square`, `square1440`; 4:5 `portrait720`, `portrait`, `portrait1440`; `whatsapp` (720p, ≤ 16 MiB).
 8. Need a variant? `studio_duplicate` gives a sandbox or a vertical cut next to the master.
 9. Reuse a look: `studio_style {action:"save", name, projectId}` / `{action:"apply", name, projectId, revision}` / `{action:"list"}` —
-   the same named styles the editor shows. Captions from disk: `studio_captions_import {projectId, revision, file, sourceIndex}`.
+   the same named styles the editor shows. Captions from disk: `studio_captions_import {projectId, revision, file, sourceIndex}`, an SRT or a WebVTT file.
    Runtime check: `studio_doctor`. Detail frames: `studio_frame {…, size:"large"}` (1920 px).
 
 ## Rules the engine enforces (so you don't have to guess)

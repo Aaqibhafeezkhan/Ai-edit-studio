@@ -13,7 +13,7 @@ import { LIMITS } from '../public/edit-ops.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-edit-caption-import-'));
 process.env.GAME_TRAILER_STUDIO_DATA_ROOT = root;
-const { importTranscript, editProject, reviewProject, getProject } = await import('../src/studio.mjs');
+const { importTranscript, importCaptionsFile, editProject, reviewProject, getProject } = await import('../src/studio.mjs');
 const { validateClips } = await import('../src/editing.mjs');
 
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -98,4 +98,44 @@ test('a later studio_edit keeps reporting the cut, and clearing it removes the n
   assert.equal(cleared.project.captionsDropped, 0);
   const review = await reviewProject(ID);
   assert.equal(review.issues.some(i => i.code === 'CAPTIONS_LIMIT'), false, 'the review note clears with the cut');
+});
+
+// studio_captions_import took SRT only, although the studio writes VTT itself and the transcript
+// import already reads it (#140). The same captions in SRT and in WebVTT must import the same way.
+const SRT_CAPTIONS = '1\n00:00:01,000 --> 00:00:03,000\nHello & welcome\n\n2\n00:00:04,500 --> 00:00:06,000\nSecond cue\n';
+const VTT_CAPTIONS = 'WEBVTT\nKind: captions\nLanguage: en\n\nNOTE this block is not a cue\n\nintro-id\n00:01.000 --> 00:03.000 line:0 position:50%\nHello &amp; welcome\n\n00:04.500 --> 00:06.000\nSecond cue\n';
+
+test('captions_import reads a WebVTT file as the same captions as its SRT (#140)', async () => {
+  const existing = await getProject(ID);
+  const srt = path.join(root, 'captions.srt');
+  const vtt = path.join(root, 'captions.vtt');
+  await fs.writeFile(srt, SRT_CAPTIONS);
+  await fs.writeFile(vtt, VTT_CAPTIONS);
+
+  const fromSrt = await importCaptionsFile(ID, { revision: existing.revision, file: srt });
+  const srtCaptions = structuredClone((await getProject(ID)).options.captions);
+  const fromVtt = await importCaptionsFile(ID, { revision: fromSrt.project.revision, file: vtt });
+  const vttCaptions = structuredClone((await getProject(ID)).options.captions);
+
+  assert.equal(fromSrt.imported, 2);
+  assert.equal(fromVtt.imported, 2, 'a .vtt file is not refused on its extension any more');
+  assert.deepEqual(vttCaptions, srtCaptions, 'header lines, cue ids and cue settings change nothing');
+  assert.deepEqual(vttCaptions.map(c => c.text), ['Hello & welcome', 'Second cue'], 'entities decode like the transcript import');
+});
+
+test('a WebVTT file is held to the caption limits, and a broken one names the mistake (#140)', async () => {
+  const existing = await getProject(ID);
+  const stamp = s => `00:${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}.000`;
+  const many = 'WEBVTT\n\n' + Array.from({ length: LIMITS.captions + 1 }, (_, i) => `${stamp(i * 2)} --> ${stamp(i * 2 + 1)}\nline ${i}`).join('\n\n');
+  const tooMany = path.join(root, 'many.vtt');
+  await fs.writeFile(tooMany, many);
+  await assert.rejects(() => importCaptionsFile(ID, { revision: existing.revision, file: tooMany }),
+    e => e.code === 'INVALID_CAPTIONS' && /At most 1200 caption lines/.test(e.message),
+    'the caption limits apply to VTT too, not only to SRT');
+
+  const broken = path.join(root, 'broken.vtt');
+  await fs.writeFile(broken, 'WEBVTT\n\n00:00 --> 00:02\nno milliseconds\n');
+  await assert.rejects(() => importCaptionsFile(ID, { revision: existing.revision, file: broken }),
+    e => e.code === 'INVALID_CAPTIONS' && /VTT requires times like 00:00:04\.000/.test(e.message),
+    'a broken VTT gives INVALID_CAPTIONS with the reason, not a stack trace');
 });
