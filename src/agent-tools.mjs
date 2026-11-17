@@ -80,7 +80,7 @@ export const OPERATION_GUIDE = {
   speed_ramp: '{op:"speed_ramp", clip, from:1, to:0.5, steps:4} — stepped speed ramp (the shot is split into steps with interpolated speed)',
   add_overlay: '{op:"add_overlay", sourceIndex, start, end (SOURCE s), at (TIMELINE s), mode:"full"|"pip", position?:"top-right"|…, size?:0.32, gain?:0, fade?} — B-roll cutaway over the edit (main sound continues) or picture-in-picture',
   update_overlay: '{op:"update_overlay", index, ...fields}', remove_overlay: '{op:"remove_overlay", index}',
-  add_text: '{op:"add_text", start, end?, text, style?:"title"|"lower"|"big"|"note", position?:"center"|"low"|"high"|"left-low"|"left-high"} — on-screen text in TIMELINE seconds (title cards, lower thirds); not captions',
+  add_text: '{op:"add_text", start, end?, text, style?:"title"|"lower"|"big"|"note"|"callout", position?:"center"|"low"|"high"|"left-low"|"left-high"} — on-screen text in TIMELINE seconds (title cards, lower thirds); not captions',
   update_text: '{op:"update_text", index, ...fields}', remove_text: '{op:"remove_text", index}',
 };
 const spec = (name, description, inputSchema, readOnly = false) => ({ name: `studio_${name}`, description, inputSchema,
