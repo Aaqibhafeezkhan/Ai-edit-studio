@@ -324,6 +324,32 @@ test('publish drafts deduplicate hashtags before applying each platform limit', 
   assert.deepEqual(x.hashtags, ['#GameDev', '#Indie']);
 });
 
+test('publish: YouTube and Shorts drafts strip angle brackets from title and description', () => {
+  const d = metadataDrafts({
+    title: 'Boss fight <3 > everything',
+    brief: 'New level <beta> is out',
+    cta: 'Play > now',
+    chapterList: [{ line: '00:00 Intro <3' }, { line: '00:20 Fight > all' }, { line: '00:40 End' }],
+    platforms: ['youtube', 'shorts', 'tiktok', 'x']
+  });
+  // YouTube and Shorts should have no < or > in title or description
+  assert.ok(!d.youtube.title.includes('<') && !d.youtube.title.includes('>'), 'youtube title has angle brackets');
+  assert.ok(!d.youtube.description.includes('<') && !d.youtube.description.includes('>'), 'youtube description has angle brackets');
+  assert.ok(!d.shorts.title.includes('<') && !d.shorts.title.includes('>'), 'shorts title has angle brackets');
+  assert.ok(!d.shorts.description.includes('<') && !d.shorts.description.includes('>'), 'shorts description has angle brackets');
+  // The angle brackets should be replaced with look-alike characters
+  assert.ok(d.youtube.title.includes('‹') || d.youtube.title.includes('›'), 'youtube title should have replacement characters');
+  // Other platforms should be unchanged
+  assert.equal(d.tiktok.description.includes('<'), true, 'tiktok description should keep angle brackets');
+  assert.equal(d.x.description.includes('<'), true, 'x description should keep angle brackets');
+  assert.ok(d.youtube.description.includes('00:00 Intro ‹3\n00:20 Fight › all\n00:40 End'));
+  assert.ok(d.tiktok.description.includes('Play > now'));
+  // Description should still fit within limits
+  assert.ok(d.youtube.description.length <= 5000);
+  assert.ok(d.shorts.description.length <= 5000);
+});
+
+
 test('publish pack deduplicates brand and title hashtags before taking six', async t => {
   let tools; try { tools = findFfmpegTools(); } catch { return t.skip('FFmpeg not available'); }
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'aes-publish-tags-'));

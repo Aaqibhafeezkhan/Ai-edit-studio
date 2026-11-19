@@ -38,8 +38,8 @@ function takeByWidth(text, budget) {
 }
 
 export const PUBLISH_PLATFORMS = Object.freeze({
-  youtube: { name: 'YouTube', titleMax: 100, descriptionMax: 5000, tags: [] },
-  shorts: { name: 'YouTube Shorts', titleMax: 100, descriptionMax: 5000, tags: ['shorts'] },
+  youtube: { name: 'YouTube', titleMax: 100, descriptionMax: 5000, tags: [], noAngleBrackets: true },
+  shorts: { name: 'YouTube Shorts', titleMax: 100, descriptionMax: 5000, tags: ['shorts'], noAngleBrackets: true },
   tiktok: { name: 'TikTok', titleMax: 0, descriptionMax: 2200, tags: [] },
   reels: { name: 'Instagram Reels', titleMax: 0, descriptionMax: 2200, tags: ['reels'] },
   x: { name: 'X', titleMax: 0, descriptionMax: 280, tags: [] },
@@ -58,6 +58,8 @@ const shorten = (text, max) => {
   return `${whole.trimEnd()}…`;
 };
 const filterPath = value => path.resolve(value).replaceAll('\\', '/').replace(':', '\\:').replaceAll("'", "\\'");
+
+const stripAngleBrackets = text => String(text).replaceAll('<', '‹').replaceAll('>', '›');
 
 /** YouTube-style chapters (first at 0:00, ≥3 chapters, ≥10 s apart): sections first, else labelled markers or clip labels. */
 export function chapters(clips, options = {}) {
@@ -136,16 +138,18 @@ export function metadataDrafts({ title, brief, cta, chapterList = [], tags = [],
   const out = {};
   for (const id of platforms) {
     const p = PUBLISH_PLATFORMS[id]; if (!p) continue;
+    const sanitize = p.noAngleBrackets ? stripAngleBrackets : text => text;
+    const platformBase = sanitize(base);
     const list = uniqueHashtags([...p.tags, ...tags]).slice(0, id === 'x' ? 2 : 6).map(t => `#${t}`);
     // The call to action, the chapter list and the hashtags have to survive the cut, so the brief is what gets shortened.
-    const tail = [cta ? clean(cta, 100) : '', id === 'youtube' && chapterList.length ? `\n${chapterList.map(c => c.line).join('\n')}` : '', list.join(' ')].filter(Boolean);
+    const tail = [cta ? sanitize(clean(cta, 100)) : '', id === 'youtube' && chapterList.length ? `\n${chapterList.map(c => sanitize(c.line)).join('\n')}` : '', list.join(' ')].filter(Boolean);
     const fixed = tail.length ? `\n\n${tail.join('\n\n')}` : '';
-    let head = about || base;
+    let head = sanitize(about) || platformBase;
     if (head.length + fixed.length > p.descriptionMax) head = shorten(head, p.descriptionMax - fixed.length);
     const pieces = [head, ...tail].filter(Boolean);
     let description = pieces.join('\n\n');
     if (description.length > p.descriptionMax) description = shorten(description, p.descriptionMax);
-    out[id] = { platform: p.name, ...(p.titleMax ? { title: cut(base, p.titleMax) } : {}), description, hashtags: list, draft: true };
+    out[id] = { platform: p.name, ...(p.titleMax ? { title: cut(platformBase, p.titleMax) } : {}), description, hashtags: list, draft: true };
   }
   return out;
 }
