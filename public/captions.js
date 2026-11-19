@@ -1,7 +1,8 @@
 // Shared browser/engine contract: captions stay attached to source time, not edit time.
 import { LIMITS, overlapOf } from './edit-ops.js';
+import { splitWords, joinWords } from './transcript.js';
 export function normalizeCaptions(rows = []) {
-  if (!Array.isArray(rows) || rows.length > 300) throw new Error('At most 300 caption lines.');
+  if (!Array.isArray(rows) || rows.length > LIMITS.captions) throw new Error(`At most ${LIMITS.captions} caption lines.`);
   return rows.map((c, i) => {
     if (!Number.isInteger(c.sourceIndex) || c.sourceIndex < 0 || c.sourceIndex >= LIMITS.sources
       || !Number.isFinite(c.start) || !Number.isFinite(c.end) || c.start < 0 || c.end <= c.start || c.end > LIMITS.sourceSeconds) {
@@ -23,7 +24,7 @@ export function normalizeCaptions(rows = []) {
 /** Word timings for a cue: real ones when present, otherwise spread over the cue by word length. */
 export function cueWords(cue) {
   if (cue.words?.length) return cue.words;
-  const parts = String(cue.text).split(' ').filter(Boolean), span = cue.end - cue.start;
+  const parts = splitWords(cue.text), span = cue.end - cue.start;
   const weights = parts.map(p => p.length + 1), total = weights.reduce((a, b) => a + b, 0) || 1;
   let t = cue.start;
   return parts.map((text, i) => { const d = span * weights[i] / total; const w = { start: t, end: t + d, text }; t += d; return w; });
@@ -39,17 +40,31 @@ function srtBlocks(text) {
 function cueFromBlock(block, sourceIndex) {
   const lines = block.split('\n'); if (/^\d+$/.test(lines[0].trim())) lines.shift();
   const times = lines.shift()?.split('-->');
-  if (times?.length !== 2 || !lines.length) throw new Error('Invalid SRT block.');
-  return { sourceIndex, start: stamp(times[0]), end: stamp(times[1].trim().split(/\s+/)[0]), text: lines.join(' ').replace(/<[^>]*>/g, '').replace(/\{\\[^}]*\}/g, '').trim() };
+  if (times?.length !== 2) throw new Error('Invalid SRT block.');
+  const start = stamp(times[0]), end = stamp(times[1].trim().split(/\s+/)[0]);
+  const text = lines.join(' ').replace(/<[^>]*>/g, '').replace(/\{\\[^}]*\}/g, '').trim();
+  if (!text) return null; // A cue with a valid time line but no text is skipped, like parseVttCues.
+  return { sourceIndex, start, end, text };
 }
 export function parseSrt(text, sourceIndex = 0) {
   if (text.length > 128 * 1024) throw new Error('SRT is too large (at most 128 KiB).');
-  return normalizeCaptions(srtBlocks(text.replace(/^\uFEFF/, '')).map(block => cueFromBlock(block, sourceIndex)));
+  const blocks = srtBlocks(text.replace(/^\uFEFF/, ''));
+  const cues = blocks.map(block => cueFromBlock(block, sourceIndex)).filter(Boolean);
+  if (blocks.length && !cues.length) throw new Error('SRT has no captions.');
+  return normalizeCaptions(cues);
+}
+/** WebVTT as captions: the cues parseVttCues() reads, held to the same caption limits parseSrt() applies. */
+export function parseVtt(text, sourceIndex = 0) {
+  if (text.length > 128 * 1024) throw new Error('VTT is too large (at most 128 KiB).');
+  const clean = text.replace(/^\uFEFF/, '');
+  const cues = parseVttCues(clean, sourceIndex);
+  if (srtBlocks(clean).length && !cues.length) throw new Error('VTT has no captions.');
+  return normalizeCaptions(cues);
 }
 /** Transcript cues: the same SRT shape without the caption limits — a talk has thousands of
  * cues, and importTranscript already caps the file at 32 MiB. */
 export function parseSrtCues(text, sourceIndex = 0) {
-  return srtBlocks(text.replace(/^\uFEFF/, '')).map(block => cueFromBlock(block, sourceIndex));
+  return srtBlocks(text.replace(/^\uFEFF/, '')).map(block => cueFromBlock(block, sourceIndex)).filter(Boolean);
 }
 function vttStamp(value) {
   const m = value.trim().match(/^(?:(\d{2,}):)?([0-5]\d):([0-5]\d)\.(\d{3})$/);
@@ -103,16 +118,22 @@ export function mapCaptions(rows, clips, offset = 0) {
         const words = cueWords(cue).map(w => ({ start: w.start + offset, end: w.end + offset, text: w.text }))
           .filter(w => (w.start + w.end) / 2 >= start && (w.start + w.end) / 2 <= end)
           .map(w => ({ start: at(Math.max(start, w.start)), end: at(Math.min(end, w.end)), text: w.text }));
-        result.push({ start: at(start), end: at(end), text: words.length && words.length < cueWords(cue).length ? words.map(w => w.text).join(' ') : cue.text, words });
+        result.push({ start: at(start), end: at(end), text: words.length && words.length < cueWords(cue).length ? joinWords(words.map(w => w.text)) : cue.text, words });
       }
     }
     cursor += (clip.end - clip.start) / speed;
   });
   return result.sort((a, b) => a.start - b.start);
 }
-function srtTime(value) {
+function captionTime(value, separator = ',') {
   const ms = Math.round(value * 1000);
-  return `${String(Math.floor(ms / 3600000)).padStart(2, '0')}:${String(Math.floor(ms / 60000) % 60).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`;
+  return `${String(Math.floor(ms / 3600000)).padStart(2, '0')}:${String(Math.floor(ms / 60000) % 60).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}${separator}${String(ms % 1000).padStart(3, '0')}`;
 }
-export function toSrt(rows) { return rows.map((c, i) => `${i + 1}\n${srtTime(c.start)} --> ${srtTime(c.end)}\n${c.text}\n`).join('\n'); }
-export function toVtt(rows) { return `WEBVTT\n\n${toSrt(rows).replace(/(\d{2,}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')}`; }
+export function toSrt(rows) { return rows.map((c, i) => `${i + 1}\n${captionTime(c.start)} --> ${captionTime(c.end)}\n${c.text}\n`).join('\n'); }
+export function toVtt(rows) {
+  const cues = rows.map((c, i) => {
+    const text = String(c.text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    return `${i + 1}\n${captionTime(c.start, '.')} --> ${captionTime(c.end, '.')}\n${text}\n`;
+  });
+  return `WEBVTT\n\n${cues.join('\n')}`;
+}

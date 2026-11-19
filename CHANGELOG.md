@@ -2,7 +2,40 @@
 
 ## Unreleased
 
+- Docs: TROUBLESHOOTING.md has an "Errors from tools and agents" section that explains twelve common tool and agent error codes with plain-language causes and recovery steps, and SUPPORT.md no longer promises an answer for every error code. Thanks to @RealBhupesh! (#100, #120)
+- **A mistyped `GAME_TRAILER_STUDIO_PORT` is reported as `INVALID_PORT` right away:** `health()` used to swallow the error while deciding whether the server was up, so the CLI started a doomed daemon and answered `SERVER_START_FAILED` with a pointer to `server.log`. The port is now checked before anything is started or logged, and the message names the variable and the 1–65535 range. Thanks to @17302513901yh-lang! (#133, #142)
+- **Suggested sections no longer break a one-recording project:** `studio_sections {action:"suggest"}` never proposes two sections on the same shot, saving two sections on one shot is refused with `INVALID_SECTION` and a message that names both (through `studio_sections` and `studio_edit`), and a project that already holds such a pair opens again: the last section on the shot wins, so `studio_sections`, `studio_timeline`, the chapters export and `studio_publish_pack` answer instead of `INTERNAL_ERROR`. (#138)
+- CLI: `studio auto-edit` and `studio fit-duration` now work with hyphens, and an unknown tool name lists the tools and suggests a close match. Thanks to @versha-singh! (#101, #124)
+- **Captions from a long transcript are no longer cut at 300 lines:** the limit now follows the longest edit the tool allows (one readable line per second, so 1200), and a project that still exceeds it gets a `warnings` entry on `studio_edit` / `studio_transcript {action:"import"}` plus a `CAPTIONS_LIMIT` note in `studio_review`, instead of being answered `ok` with a silent cut. Thanks to @17302513901yh-lang! (#105, #131)
+- **Long Chinese and Japanese thumbnail and cover titles wrap by display width:** Han, Hiragana, Katakana and full-width punctuation count as two units, so a 22-unit thumbnail line holds eleven such characters and a 12-unit cover line holds six; a long CJK run inside a spaced title is cut too, Latin titles wrap exactly as before, and the ellipsis fits the width. Thanks to @17302513901yh-lang! (#97, #127)
+- **CJK queries and scripts work in `studio_search` and `studio_assemble`:** search queries and script lines are segmented with `splitWords()` like transcripts, so a Chinese or Japanese phrase typed without spaces now matches. Thanks to @17302513901yh-lang! (#122, #126)
+- Fix publish-pack YouTube chapters to use edit sections before falling back to labelled markers or clip labels. Thanks to @matiasad! (#121, #125)
+- **A wrong `--duration`, `--fps` or `--seed` is refused instead of silently replaced:** `run --duration abc` used to render a 5-second trailer and `--fps 0` rendered at 24 fps, both reporting success. A non-number or out-of-range value now fails on the server with `INVALID_DURATION` / `INVALID_FPS` / `INVALID_SEED`, naming the value and the range, and no job is created; omitted flags keep their defaults. Thanks to @17302513901yh-lang! (#134, #143)
+- **A shot id that no longer exists is refused by every tool that takes `clips`:** `studio_reframe` and `studio_auto_zoom` used to answer `ok` with "Nothing to reframe (same aspect or stills)." / "No shots long enough.", and `studio_color_match` said "No matching shots.", because they skipped ids they did not know. All three now answer `CLIP_NOT_FOUND` with the id, like `studio_stabilize` already did (ids change after a split or a new edit proposal). `clips: "all"`, an omitted `clips` and a list of existing ids behave as before, and `dryRun` is covered. Thanks to @17302513901yh-lang! (#135, #149)
+- **Argument errors say what is allowed:** `INVALID_ARGUMENTS` messages now list the allowed choices, the numeric bounds (`>= 1`), the text length limit and the expected identifier pattern, without echoing the value that was sent. The error code and the `arguments.<path>:` prefix are unchanged, and invalid calls still fail before any API call. Thanks to @RealBhupesh! (#91, #119)
+- **A freeze frame at or after the end of the edit is refused with a clear message:** `studio_freeze` names the edit's range (for example `0–20 s`) before FFmpeg runs, instead of failing with `UNSUPPORTED_MEDIA` for a frame that does not exist. Thanks to @tnalbant! (#132, #148)
+- **Caption errors name the caption and the source:** `INVALID_CAPTIONS` says which caption ends after its source, how long the source is, and which `sourceIndex` does not exist. Thanks to @17302513901yh-lang! (#136, #150)
+- **A project made without a template has no game-trailer stamp:** `label` and `endTitle` default to empty instead of `PRE-ALPHA FOOTAGE` / `IN DEVELOPMENT`, so a holiday clip no longer gets a game stamp and its publish drafts no longer use `IN DEVELOPMENT` as the call to action. The `game-trailer` template keeps its stamp, explicit values are kept, and existing projects keep what they stored. Thanks to @17302513901yh-lang! (#104, #156)
+- **Texts, markers and sound effects after the end of the edit are reported:** `studio_review` (and so the `dryRun` review of `studio_edit`) now gives `TEXT_AFTER_END`, `TEXT_CUT_OFF` and `SFX_AFTER_END` (warnings) and `MARKER_AFTER_END` (tip), each with a `fix.operations` list that clears the note in one pass, also for edit lengths such as 6.666… s. A text that lies wholly after the end no longer hides the `NO_TEXT` tip, and items inside the edit give no new notes. Thanks to @17302513901yh-lang! (#139, #155)
+- **Chinese and Japanese titles give word-sized hashtags:** `hashtags()` segments CJK text with the shared `splitWords()` (`Intl.Segmenter`), so `今天我们来做一个游戏` gives tags such as `游戏` and `预告片` instead of whole clauses. Voiced kana are kept, common function words are dropped, and English and Dutch tags are unchanged. Thanks to @17302513901yh-lang! (#92, #161)
+- **A story dry run fails where the build would:** `studio_apply` with `dryRun` now checks every footage file, `music.file` and each source range against the real clip length, and answers `FILE_NOT_FOUND` / `INVALID_STORY` instead of `ok`. A key the story format does not know (a top-level `bpm`, `muisc`, `lnes`, `accnt`) becomes an `UNKNOWN_KEY` warning that names the nearest key, such as `music.bpm`. Thanks to @tnalbant! (#106, #160)
+- **`studio_captions_import` reads WebVTT:** a `.vtt` file is now accepted like an `.srt` (header lines, `NOTE` blocks, cue ids and cue settings are ignored) and is held to the same caption limits, and the editor's caption picker takes `.vtt` too. Thanks to @tnalbant! (#140, #159)
+- **`--request` file errors have a studio code:** a missing `studio <tool> --request` file answers `FILE_NOT_FOUND` and a folder answers `INVALID_ARGUMENTS`, both naming the path, instead of a raw `ENOENT` / `EISDIR`. Thanks to @khizzcr7! (#81, #86)
+- Docs: the `studio_edit` operation guide is tested against the supported operations and text styles, so it cannot drift from the tool again. Thanks to @Aaqibhafeezkhan! (#137, #164)
+
+## 0.12.0 — captions, chapters and a friendlier CLI
+
+Better subtitles in and out, chapters inside the MP4, exact NTSC frame rates and a CLI that explains itself. 59 tools, nothing removed.
+
+- **Animated captions wrap long words and long lines**: a word longer than the line (a URL, a long German compound, a Chinese or Japanese line) is cut into pieces that each keep their share of the word's time, and a cue without word timings wraps between words instead of running off the screen (#57).
+- **Chinese and Japanese speech becomes real words**: transcripts are split into words with `Intl.Segmenter`, with the whisper token timings kept, so text editing, search and word captions work for CJK. Without `Intl.Segmenter` it falls back to one piece per character (#62).
+- **Japanese hashtags keep their voiced marks**: が, ぱ and the like are no longer broken by the accent folding, while Latin accents still fold (#80).
+- **`--version`, `-v`, `version` and `-h`** work on the command line (#90).
+- **Publish drafts no longer turn common words into hashtags**: words such as "about", "here" and "some", and their Dutch counterparts, are skipped, while real topic words like "update" stay (#61).
+- **A title or brief cut at the limit never ends in half an emoji** (#79).
+- **The YouTube chapters export warns when YouTube would ignore the list**: fewer than three chapters, or a chapter shorter than 10 s, gives a `warnings` list next to the unchanged text (#60).
 - **The CSV shot list is spreadsheet-safe**: a label, section or source name that starts with `=`, `+`, `-` or `@` (or a tab or carriage return) gets a leading `'` inside the quotes, so Excel and LibreOffice read it as text instead of a formula; numbers stay numbers (#59).
+- **NTSC frame rates export exactly**: 23.976, 29.97 and 59.94 keep their real rate instead of rounding to 24/30/60 — 29.97 and 59.94 write drop-frame EDLs (`FCM: DROP FRAME`, `;` timecodes) and a `1001/30000s` FCPXML timebase, 23.976 a 24-frame non-drop EDL, OTIO the fractional rate, and integer rates are unchanged (#63).
 - **Chinese and Japanese clips follow sentence boundaries**: the clip finder recognises full-width sentence endings, including those before a closing quote or parenthesis (#51).
 - **Chinese and Japanese transcript captions split at sentence endings**, including short sentences and punctuation before a closing quote or parenthesis (#58).
 - **Long thumbnail and cover titles show an ellipsis** when more than three wrapped lines are needed (#48).
@@ -25,21 +58,31 @@
 - **Captions as SRT and WebVTT from the timeline**: `studio_export_timeline {format:"srt"|"vtt"}` follows cuts, speed changes and caption offsets, with export buttons in the editor (#33).
 - **More SRT files import**: one-digit hours (`0:00:01,000`) and position coordinates after the end time are accepted (#43).
 - **`bars` scene for story documents**: up to eight bars grow one after another to show a comparison, with an optional highlight and a `<id>.done` event (#42).
+- **VTT exports preserve caption text** by escaping `&`, `<` and `>` in cues (#71).
 - **VTT transcripts decode HTML entities**: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`, `&nbsp;` and numeric forms become the characters they stand for, decoded once after the tags are stripped (#40).
 - **MP4 chapters**: full renders embed one chapter per section (or labelled marker), with the same times as the chapters export plus any brand intro; `options.chapters:"off"` turns it off and previews and range renders get none (#41).
 - **`node cli.mjs studio <tool> --help` and typed flags**: every top-level tool argument works as a kebab-case flag (`--timeout-seconds 30`, `--export-id`), converted from the tool's schema, and an unknown flag is refused with the list of valid ones (#44).
 - **Platform drafts keep the call to action and hashtags**: a long brief is shortened on a whole word to make room, instead of the end of the draft being cut off (#50).
 - **Hashtags that differ only in case appear once** in publish drafts, so repeated tags no longer push other tags out (#47).
+- **Timeline exports: escaped media URLs.** A `#` or `?` in a source file name is written as `%23` or `%3F` in the FCPXML `media-rep` `src` and the OTIO `target_url`, so editors open the clip instead of looking for a shorter path (#99, #109).
+- **Hashtags in German, French and Spanish:** common filler words (`spiel`, `wirklich`, `schon`, `dans`, `jugadores` and more) no longer become hashtags, while the topic words stay. English, Dutch and Japanese are unchanged. (#96, #111)
+- **An empty SRT cue is skipped** instead of rejecting the whole file; a file with no captions at all still gives a clear error (#95, #112).
+- **Hindi quick start** (`docs/README.hi.md`), linked from the README next to the Dutch one. (#108, #110)
+- **A story with a wrong `music.style`, `music.mood` or `music.seed` is refused** with `INVALID_STORY` and the list of allowed values, instead of silently composing a `pop` track with the default mood and a random seed. `music.seed` must be an integer number in the same range as `studio_music` (0 to 2147483647): strings, booleans, `null`, negative and fractional values are refused, and the compiled story keeps the number as given. An explicit `style: null` or `mood: null` is refused too; leave the field out to mean "not set". Thanks to @17302513901yh-lang! (#102, #113)
 
 ### Thanks
 
-- @bfs2021 for the generated help (#13), the long SRT/VTT transcript import (#20), the `=` flag fix (#27) the VTT entity decoding (#40) and the brief that makes room for the call to action and hashtags (#50) and the ASS override clean-up in SRT import (#65).
+- @bfs2021 for the generated help (#13), the long SRT/VTT transcript import (#20), the `=` flag fix (#27) the VTT entity decoding (#40) and the brief that makes room for the call to action and hashtags (#50) and the ASS override clean-up in SRT import (#65) and the wrapping of long words in animated captions (#74), and the escaped `#` and `?` in timeline media URLs (#109).
 - @wized2 for the clearer file errors (#14) and the named probe failures (#19).
-- @rahul05ranjan for the spreadsheet-safe CSV shot list (#66), their first contribution to AI Edit Studio.
+- @khizzcr7 for cutting titles and briefs without splitting an emoji (#87), their first contribution to AI Edit Studio.
+- @matiasad for keeping the voiced marks of Japanese hashtags (#88), their first contribution to AI Edit Studio, and the German, French and Spanish hashtag stop words (#111).
+- @enidchen0125 for the case-insensitive hashtag dedupe in publish drafts (#64), their first contribution to AI Edit Studio.
+- @rahul05ranjan for the spreadsheet-safe CSV shot list (#66), the exact NTSC frame rates in the timeline export (#67), the chapter warnings (#77), the longer hashtag stop list (#84) and the Chinese and Japanese word segmentation (#85); #66 was their first contribution to AI Edit Studio.
+- @versha-singh for the Hindi quick start (#110).
 - @tnalbant for the accent-folding brand kit ids that keep old kits readable (#29) and the request-file check (#28).
 - @DaniLlano for the chapter fix (#30), the preview shapes (#31), the safer speech setup (#32), OTIO transitions (#35), the music and story pointers for agents (#36), the SRT time fix (#43), the `bars` scene (#42), MP4 chapters (#41) and the schema-derived CLI flags with per-tool help (#44).
 - @Aaqibhafeezkhan for the troubleshooting entries and their error-code test (#37), the tool-count and version sync with its docs test (#34) and the SRT/VTT timeline export (#33).
-- @Daiyuanranfeng for the Chinese and Japanese sentence endings in the clip finder (#51), the shorthand hex colours for brand kits (#49) and the ellipsis on cut-off cover titles (#54).
+- @Daiyuanranfeng for the Chinese and Japanese sentence endings in the clip finder (#51), the shorthand hex colours for brand kits (#49), the ellipsis on cut-off cover titles (#54), the Chinese and Japanese sentence ends in transcript captions (#69) and the escaping of `&`, `<` and `>` in VTT exports (#73) and the version and help aliases (#94).
 
 ## 0.11.0 — story documents
 
@@ -54,7 +97,7 @@
 
 - @wized2 for the 404 status codes (#12), the first outside contribution to AI Edit Studio.
 
-## Unreleased — every output size, npm package, open source
+## Earlier — every output size, npm package, open source
 
 - **All formats**: 720p (`hd`, no size cap), 1080p, 1440p, 4K and 21:9 ultrawide (`ultrawide`, 2560×1080, crops to
   fill the frame instead of black bars) as master; 9:16 at 720, 1080, 1440 and 4K; 1:1 and 4:5 at 720, 1080 and 1440.
@@ -68,7 +111,7 @@
   `publish-mcp.yml` lists a published npm version in the registry. Version 0.10.1 (first version with `mcpName`).
 - **Open source** under the MIT license. The Windows default data folder is now `Documents\AI Edit Studio`.
 
-## Unreleased — Claude Code + OpenAI Codex plugins, OpenAI API, installer and release zip, workflow skills
+## Earlier — Claude Code + OpenAI Codex plugins, OpenAI API, installer and release zip, workflow skills
 
 - **Installer for buyers**: `node cli.mjs install` (double-click `Install-AI-Edit-Studio.cmd`, or `./install.sh`)
   chooses the data folder once, checks FFmpeg (Windows/macOS: offers winget/Homebrew for Node and FFmpeg) and connects

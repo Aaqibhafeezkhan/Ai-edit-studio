@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { normalizeOptions, validateClips, proposeEdit, validateCaptionSources } from '../src/editing.mjs';
 import { normalizeFinish, normalizeTransform, gradeFilter } from '../src/finishing.mjs';
 import { EditHistory, splitClip, availableClip } from '../public/edit-history.js';
-import { parseSrt, parseSrtCues, parseVttCues, mapCaptions, normalizeCaptions, toSrt } from '../public/captions.js';
+import { parseSrt, parseSrtCues, parseVttCues, mapCaptions, normalizeCaptions, toSrt, toVtt } from '../public/captions.js';
+import { LIMITS } from '../public/edit-ops.js';
 import { callAgentTool, agentTools } from '../src/agent-tools.mjs';
 import { buildFilter, renderTrailer } from '../src/render.mjs';
 import { proposeSilenceCuts } from '../src/silence.mjs';
@@ -74,6 +75,19 @@ test('SRT captions follow source trims, reorder, speed and timing correction', (
   assert.equal(mapCaptions(cues, [clip], 1)[0].start, 3);
   assert.throws(() => parseSrt('1\nnot a time\nHello')); assert.throws(() => normalizeCaptions([{ sourceIndex: 0, start: 5, end: 2, text: 'bad' }]));
   assert.throws(() => validateCaptionSources(cues, [{ duration: 3 }]));
+  // #136: the message names the caption, its end time and the source length,
+  // and a sourceIndex that does not exist gets its own clear message.
+  const over = [{ sourceIndex: 0, start: 25, end: 28, text: 'Past the end of the clip' }];
+  assert.throws(() => validateCaptionSources(over, [{ name: 'a.mp4', duration: 20 }]),
+    (e) => e.code === 'INVALID_CAPTIONS'
+      && /Caption 1 \("Past the end of the clip"\) ends at 28\.0 s, but source 0 \(a\.mp4\) is 20\.0 s long\./.test(e.message)
+      && /Use the SRT of the original source file\./.test(e.message));
+  assert.throws(() => validateCaptionSources([{ sourceIndex: 4, start: 1, end: 2, text: 'Hi' }], [{ duration: 20 }, { duration: 20 }]),
+    (e) => e.code === 'INVALID_CAPTIONS' && /Caption 1 points to source 4; this project has 2 sources\./.test(e.message));
+  assert.throws(() => validateCaptionSources([{ sourceIndex: 0, start: 1, end: 2, text: 'x'.repeat(90) }], [{ duration: 1 }]),
+    (e) => /"x{40}…"/.test(e.message), 'a long caption text is cut to about 40 characters');
+  assert.doesNotThrow(() => validateCaptionSources([{ sourceIndex: 0, start: 1, end: 2, text: 'Inside' }], [{ duration: 20 }]),
+    'captions inside the source are accepted as before');
 });
 test('SRT: one-digit hours and position coordinates after the end time are accepted', () => {
   const pick = ({ start, end, text }) => ({ start, end, text });
@@ -85,10 +99,28 @@ test('SRT: one-digit hours and position coordinates after the end time are accep
   }
   assert.throws(() => parseSrt('1\n00:00:01,000 --> not a time\nHi'), /SRT requires times/);
 });
+test('SRT: an empty cue is skipped, like the WebVTT importer does', () => {
+  const srt = '1\n00:00:01,000 --> 00:00:02,000\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\n\n\n3\n00:00:05,000 --> 00:00:06,000\nBye\n';
+  for (const cues of [parseSrt(srt), parseSrtCues(srt)]) assert.deepEqual(cues.map(c => c.text), ['Hello', 'Bye']);
+  // A cue whose text is only tags has no text either.
+  assert.deepEqual(parseSrtCues('1\n00:00:01,000 --> 00:00:02,000\n{\\an8}\n\n2\n00:00:03,000 --> 00:00:04,000\nHi\n').map(c => c.text), ['Hi']);
+  // A block with no --> line is still invalid, and a bad time still errors even with no text.
+  assert.throws(() => parseSrt('1\n00:00:01,000 --> 00:00:02,000\nHi\n\n2\nno time line here\nHello'), /Invalid SRT block/);
+  assert.throws(() => parseSrt('1\n00:00:01,000 --> not a time\n'), /SRT requires times/);
+  // A file whose only cue is empty: no cues for transcripts, a clear error for captions.
+  const only = '1\n00:00:01,000 --> 00:00:02,000\n';
+  assert.deepEqual(parseSrtCues(only), []);
+  assert.throws(() => parseSrt(only), /SRT has no captions/);
+});
 test('transcript cues drop the caption limits; VTT reads header, settings, ids and short times', () => {
-  const long = Array.from({ length: 400 }, (_, i) => `${i + 1}\n00:00:${String(i % 60).padStart(2, '0')},${String((i * 7) % 1000).padStart(3, '0')} --> 00:00:${String((i + 1) % 60).padStart(2, '0')},000\ncue ${i + 1}`).join('\n\n');
-  assert.equal(parseSrtCues(long).length, 400);
-  assert.throws(() => parseSrt(long), /At most 300 caption lines|too large/);
+  const srt = n => Array.from({ length: n }, (_, i) => {
+    const at = s => `00:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')},000`;
+    return `${i + 1}\n${at(i)} --> ${at(i + 1)}\ncue ${i + 1}`;
+  }).join('\n\n');
+  // 400 cues is a normal 20-minute talk, so both parsers must read it in full (#105).
+  assert.equal(parseSrtCues(srt(400)).length, 400);
+  assert.equal(parseSrt(srt(400)).length, 400);
+  assert.throws(() => parseSrt(srt(LIMITS.captions + 1)), new RegExp(`At most ${LIMITS.captions} caption lines|too large`));
   assert.ok(parseSrtCues(`1\n00:00:01,000 --> 00:00:02,000\n${'word '.repeat(40)}`)[0].text.length > 180);
   // A talk has more than 300 cues, so the transcript import path must not go through parseSrt.
   const youtube = ['WEBVTT', 'Kind: captions', 'Language: en', '', 'intro', '00:00:04.000 --> 00:00:06.000 align:start position:0%', 'Hello there', '', 'NOTE this block is a comment', '', 'STYLE\n::cue { color: red }', '', '00:01.000 --> 00:04.000', 'Short times on both sides', '', '00:00:10.000 --> 01:02:03.456', 'Full form end'].join('\n');
@@ -105,6 +137,29 @@ test('VTT import decodes HTML entities in cue text after stripping tags', () => 
   assert.equal(tagged[0].text, '<b>bold</b>');
   const proto = parseVttCues('WEBVTT\n\n00:01.000 --> 00:02.000\n&constructor; &amp;lt; &amp;');
   assert.equal(proto[0].text, '&constructor; &lt; &');
+});
+test('VTT export escapes cue text and round-trips without changing timing or SRT', () => {
+  const rows = [
+    { start: 0, end: 2, text: 'Tom & Jerry <3 forever' },
+    { start: 2, end: 4, text: 'a --> b' },
+    { start: 4, end: 6, text: 'Literal &lt;' },
+    { start: 6, end: 8, text: 'Ordinary caption' },
+    { start: 8, end: 10, text: 'Timecode 00:00:01,250' },
+  ];
+  const vtt = toVtt(rows);
+  assert.equal(vtt, [
+    'WEBVTT', '',
+    '1', '00:00:00.000 --> 00:00:02.000', 'Tom &amp; Jerry &lt;3 forever', '',
+    '2', '00:00:02.000 --> 00:00:04.000', 'a --&gt; b', '',
+    '3', '00:00:04.000 --> 00:00:06.000', 'Literal &amp;lt;', '',
+    '4', '00:00:06.000 --> 00:00:08.000', 'Ordinary caption', '',
+    '5', '00:00:08.000 --> 00:00:10.000', 'Timecode 00:00:01,250', '',
+  ].join('\n'));
+  assert.deepEqual(parseVttCues(vtt), rows.map(row => ({ sourceIndex: 0, ...row })));
+  assert.equal(toSrt(rows.slice(0, 2)), [
+    '1', '00:00:00,000 --> 00:00:02,000', 'Tom & Jerry <3 forever', '',
+    '2', '00:00:02,000 --> 00:00:04,000', 'a --> b', '',
+  ].join('\n'));
 });
 test('SRT import drops ASS override blocks but keeps literal braces', () => {
   const srt = String.raw`1

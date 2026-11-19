@@ -5,10 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { findFfmpegTools } from '../src/ffmpeg.mjs';
 import { runProcess } from '../src/process.mjs';
-import { applyOperations, normalizeSections, sectionSpans, totalDuration, layout } from '../public/edit-ops.js';
+import { applyOperations, normalizeSections, sectionSpans, suggestSections, oneSectionPerShot, totalDuration, layout } from '../public/edit-ops.js';
 import { buildFilter, segmentBoundaries } from '../src/render.mjs';
 import { validateClips } from '../src/editing.mjs';
-import { fitDuration, searchWords, searchProject, assembleFromScript, scriptLines, multicamPlan, exportTimeline, timecode, chapterMarks, chapterMetadata } from '../src/longform.mjs';
+import { fitDuration, searchWords, searchProject, assembleFromScript, scriptLines, multicamPlan, exportTimeline, timecode, dropFrameTimecode, chapterMarks, chapterMetadata } from '../src/longform.mjs';
 import { correlate, onsets } from '../src/sync.mjs';
 import { agentTools, validateArguments, callAgentTool, OPERATIONS } from '../src/agent-tools.mjs';
 
@@ -174,7 +174,16 @@ test('timeline export: EDL, CSV, chapters, FCPXML and OTIO are well formed', () 
   assert.match(edl, /^TITLE: n/); assert.match(edl, /M2 +AX +045\.0/); assert.match(edl, /01:00:00:00 01:00:04:00/);
   const csv = exportTimeline({ format: 'csv', clips, sources, options }).content.split('\r\n');
   assert.equal(csv.length, 4); assert.match(csv[2], /"Part B"/);
-  assert.equal(exportTimeline({ format: 'chapters', clips, sources, options }).content, '00:00 Intro\n00:04 Part B');
+  const chapters = exportTimeline({ format: 'chapters', clips, sources, options });
+  assert.equal(chapters.content, '00:00 Intro\n00:04 Part B');
+  // YouTube ignores this list (2 chapters, the first only 4 s) — the export now says so (#60)
+  assert.deepEqual(chapters.warnings, [
+    'YouTube needs at least 3 chapters; this list has 2.',
+    'Chapter "Intro" is 4 s long; YouTube needs at least 10 s.',
+    'Chapter "Part B" is 5.5 s long; YouTube needs at least 10 s.']);
+  const okChapters = exportTimeline({ format: 'chapters', clips: [{ id: 'x', sourceIndex: 0, start: 0, end: 45 }], sources: [src(100)], options: { markers: [{ time: 0, label: 'A' }, { time: 15, label: 'B' }, { time: 30, label: 'C' }] } });
+  assert.equal(okChapters.content, '00:00 A\n00:15 B\n00:30 C');
+  assert.deepEqual(okChapters.warnings, []);
   const fcp = exportTimeline({ format: 'fcpxml', clips, sources, options, name: 'A & B' }).content;
   assert.match(fcp, /<project name="A &amp; B">/); assert.match(fcp, /file:\/\/\/C:\/media\/cam%20a\.mp4/); assert.match(fcp, /lane="-1" name="Voice"/);
   assert.equal((fcp.match(/<asset-clip ref="a/g) ?? []).length, 3);
@@ -183,6 +192,20 @@ test('timeline export: EDL, CSV, chapters, FCPXML and OTIO are well formed', () 
   const rb = layout(clips)[1];
   assert.equal(otio.tracks.children[0].children[1].source_range.duration.value, Math.round((rb.visibleEnd - rb.visibleStart) * 1.5 * 30), 'speed changes map to source frames');
   assert.throws(() => exportTimeline({ format: 'aaf', clips, sources }), /format/);
+});
+
+test('timeline export: # and ? in a file name stay part of the media path', () => {
+  const sources = [src(10, { name: 'phone', file: '/media/my clip #1 & 100% é.mp4' }), src(10, { name: 'camera', file: 'C:\\media\\Take #3?.mp4' })];
+  const clips = [{ id: 'a', sourceIndex: 0, start: 0, end: 2 }, { id: 'b', sourceIndex: 1, start: 0, end: 2 }];
+  const fcp = exportTimeline({ format: 'fcpxml', clips, sources }).content;
+  assert.match(fcp, /src="file:\/\/\/media\/my%20clip%20%231%20&amp;%20100%25%20%C3%A9\.mp4"/);
+  assert.match(fcp, /src="file:\/\/\/C:\/media\/Take%20%233%3F\.mp4"/);
+  const otio = JSON.parse(exportTimeline({ format: 'otio', clips, sources }).content);
+  const urls = otio.tracks.children[0].children.map(c => c.media_references.DEFAULT_MEDIA.target_url);
+  assert.deepEqual(urls, ['file:///media/my%20clip%20%231%20&%20100%25%20%C3%A9.mp4', 'file:///C:/media/Take%20%233%3F.mp4']);
+  const [posix, windows] = urls.map(u => new URL(u));
+  assert.equal(posix.hash, ''); assert.equal(posix.search, ''); assert.equal(decodeURIComponent(posix.pathname), '/media/my clip #1 & 100% é.mp4');
+  assert.equal(windows.hash, ''); assert.equal(windows.search, ''); assert.equal(decodeURIComponent(windows.pathname), '/C:/media/Take #3?.mp4');
 });
 
 test('timeline export: CSV text cells that would read as formulas are quoted', () => {
@@ -198,6 +221,59 @@ test('timeline export: CSV text cells that would read as formulas are quoted', (
   assert.match(csv[1], /"cam","0\.000","4\.000"/); // numeric columns stay numbers
   const plain = exportTimeline({ format: 'csv', clips: [{ id: 'c', sourceIndex: 0, start: 0, end: 4, label: 'Hello' }], sources, options: {} }).content.split('\r\n');
   assert.match(plain[1], /^"1","","Hello","cam"/); // ordinary labels are unchanged
+});
+
+test('timeline export: NTSC rates 23.976/29.97/59.94 export at their real frame rate', () => {
+  const sources = [src(60)];
+  const clips = [{ id: 'a', sourceIndex: 0, start: 0, end: 4 }, { id: 'b', sourceIndex: 0, start: 10, end: 14, speed: 1.5 }];
+  // drop-frame timecode (SMPTE 12M), the examples from the issue
+  assert.equal(dropFrameTimecode(1800, 30), '00:01:00;02');
+  assert.equal(dropFrameTimecode(17982, 30), '00:10:00;00');
+  assert.equal(dropFrameTimecode(3600, 60), '00:01:00;04');
+  // after the first minute boundary each 29.97 minute holds 1798 frames (3596 at 59.94)
+  assert.equal(dropFrameTimecode(3598, 30), '00:02:00;02');
+  assert.equal(dropFrameTimecode(3599, 30), '00:02:00;03');
+  assert.equal(dropFrameTimecode(1799, 30), '00:00:59;29');
+  assert.equal(dropFrameTimecode(7196, 60), '00:02:00;04');
+  // no minute except every tenth may start at a dropped frame number (;00/;01 at 29.97, ;00-;03 at 59.94)
+  for (const base of [30, 60]) {
+    const drop = base >= 60 ? 4 : 2;
+    for (let minute = 1; minute <= 120; minute++) {
+      if (minute % 10 === 0) continue;
+      const frameNumber = minute * base * 60 - minute * drop + Math.floor(minute / 10) * drop; // frames elapsed before this minute starts
+      for (let d = 0; d < drop; d++) {
+        const tc = dropFrameTimecode(frameNumber + d, base);
+        const ff = Number(tc.slice(-2));
+        assert.ok(ff >= drop, `minute ${minute} starts at a dropped frame number in ${tc}`);
+      }
+    }
+  }
+  assert.equal(timecode(1.5, 29.97), '00:00:01:15'); // no floating-point frame counts
+  assert.equal(timecode(10, 23.976), '00:00:10:00');
+  const edl = exportTimeline({ format: 'edl', clips, sources, options: {}, fps: 29.97 }).content;
+  assert.match(edl, /FCM: DROP FRAME/);
+  assert.match(edl, /C        00:00:00;00 00:00:04;00 01:00:00;00 01:00:04;00/); // one hour of record time lands on 01:00:00;00
+  assert.match(edl, /M2   AX +045\.0/); // the speed line uses the real rate
+  const fcp = exportTimeline({ format: 'fcpxml', clips, sources, options: {}, fps: 29.97 }).content;
+  assert.match(fcp, /frameDuration="1001\/30000s"/);
+  assert.match(fcp, /tcFormat="DF"/);
+  assert.match(fcp, /offset="\d+\/30000s"/); // every time in the 29.97 timebase
+  const fcp23976 = exportTimeline({ format: 'fcpxml', clips, sources, options: {}, fps: 23.976 }).content;
+  assert.match(fcp23976, /frameDuration="1001\/24000s"/);
+  assert.match(fcp23976, /tcFormat="NDF"/); // 23.976 stays non-drop
+  const otio = JSON.parse(exportTimeline({ format: 'otio', clips, sources, options: {}, fps: 29.97 }).content);
+  const rate = otio.tracks.children[0].children[0].source_range.start_time.rate;
+  assert.ok(Math.abs(rate - 30000 / 1001) < 1e-9, 'OTIO carries 30000/1001, not 30');
+  const otio30 = JSON.parse(exportTimeline({ format: 'otio', clips, sources, options: {}, fps: 30 }).content);
+  assert.equal(otio30.tracks.children[0].children[0].source_range.start_time.rate, 30); // integer rates unchanged
+  const edl30 = exportTimeline({ format: 'edl', clips, sources, options: {}, fps: 30 }).content;
+  assert.match(edl30, /FCM: NON-DROP FRAME/);
+  assert.match(edl30, /01:00:00:00 01:00:04:00/);
+  const edl23976 = exportTimeline({ format: 'edl', clips, sources, options: {}, fps: 23.976 }).content;
+  assert.match(edl23976, /FCM: NON-DROP FRAME/);
+  assert.match(edl23976, /C        00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00/); // the record hour is a whole timecode hour at non-drop rates too
+  const marks23976 = exportTimeline({ format: 'edl', clips: [{ id: 'm', sourceIndex: 0, start: 0, end: 4 }], sources, options: { markers: [{ time: 2, label: 'note' }] }, fps: 23.976 }).content;
+  assert.match(marks23976, /\* MARKER 01:00:02:00: note/); // markers use the same record clock
 });
 
 test('timeline export: OTIO carries transitions as Transition.1 items between the clips', () => {
@@ -261,6 +337,34 @@ test('0.8 tools: 46 tools, schemas validate, version gate, routes', async () => 
   assert.deepEqual(calls.filter(c => c[0] !== '/health').map(c => c[0]), [`/studio/projects/${id}/search`, `/studio/projects/${id}/export-timeline`, `/studio/projects/${id}/render-range`]);
   const old = async route => (route === '/health' ? { service: 'AI Edit Studio', version: '0.7.0-beta.1' } : {});
   await assert.rejects(callAgentTool('studio_sections', { projectId: id }, old), /RESTART_REQUIRED|predates/);
+});
+
+test('sections: never two on one shot — suggestions, saving and old projects (#138)', () => {
+  // One recording, two shots, 20 s: the "every ~2 minutes" pass used to add "Part 2" on the first shot again.
+  const two = [{ id: 'a', sourceIndex: 0, start: 0, end: 10 }, { id: 'b', sourceIndex: 0, start: 10, end: 20 }];
+  const short = suggestSections(two, { sources: [{ name: 'a.mp4' }] });
+  assert.deepEqual(short, [{ name: 'Part 1 · a.mp4', clip: 'a', at: 0 }]);
+  // A long recording still gets a section about every two minutes, each on its own shot.
+  const long = Array.from({ length: 8 }, (_, i) => ({ id: `s${i}`, sourceIndex: 0, start: i * 60, end: i * 60 + 60 }));
+  const parts = suggestSections(long, { sources: [{ name: 'talk.mp4' }] });
+  assert.deepEqual(parts.map(p => [p.name, p.clip, p.at]), [['Part 1 · talk.mp4', 's0', 0], ['Part 2', 's2', 120], ['Part 3', 's4', 240], ['Part 4', 's6', 360]]);
+  // Two labelled markers inside one shot give one proposal; a change of recording gives one per recording.
+  assert.deepEqual(suggestSections(two, { markers: [{ time: 1, label: 'Intro' }, { time: 4, label: 'Still intro' }, { time: 12, label: 'Demo' }] }).map(p => [p.name, p.clip]), [['Intro', 'a'], ['Demo', 'b']]);
+  const mixed = [{ id: 'a', sourceIndex: 0, start: 0, end: 5 }, { id: 'b', sourceIndex: 1, start: 0, end: 5 }];
+  assert.deepEqual(suggestSections(mixed, { sources: [{ name: 'one' }, { name: 'two' }] }).map(p => p.clip), ['a', 'b']);
+  for (const list of [short, parts]) assert.equal(new Set(list.map(p => p.clip)).size, list.length);
+  assert.deepEqual(suggestSections([]), []);
+
+  // Saving: the second section on a shot is refused, and the answer names both.
+  const pair = [{ name: 'Part 1 · a.mp4', clip: 'a' }, { name: 'Part 2', clip: 'a' }];
+  assert.throws(() => normalizeSections(pair), e => e.code === 'INVALID_SECTION' && /"Part 1 · a\.mp4" and "Part 2" both start at shot a/.test(e.message));
+
+  // A project that already holds such a pair: spans do not throw, the last section on the shot wins.
+  assert.deepEqual(oneSectionPerShot([...pair, { name: 'End', clip: 'b' }]).map(s => s.name), ['Part 2', 'End']);
+  const spans = sectionSpans(two, pair);
+  assert.deepEqual(spans.map(s => [s.name, s.start, s.end, s.clipIds]), [['Part 2', 0, 20, ['a', 'b']]]);
+  assert.deepEqual(sectionSpans(two, [...pair, { name: 'End', clip: 'b' }]).map(s => [s.name, s.clipIds]), [['Part 2', ['a']], ['End', ['b']]]);
+  assert.deepEqual(chapterMarks(two, { sections: pair }).map(c => c.title ?? c.name), ['Part 2']);
 });
 
 test('chapterMarks: sections, markers only and brand intro offset', () => {

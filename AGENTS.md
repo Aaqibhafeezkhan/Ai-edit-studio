@@ -18,6 +18,14 @@ Set up every agent app at once: `node cli.mjs install` (see INSTALL.md). The ser
 the hidden daemon when needed; HTTP callers start it with `node server.mjs` or the start script.
 Send `X-Studio-Client: <your-agent-name>` on HTTP calls: the editor shows your name on every revision.
 
+## New in 0.12 — captions, chapters and a friendlier CLI (still 59 tools)
+
+- `studio_export_timeline {format:"srt"|"vtt"}` writes the captions of the timeline (cuts, speed changes and caption offsets
+  followed); `format:"chapters"` returns a `warnings` list when YouTube would ignore the list (under 3 chapters, or a
+  chapter under 10 s). Full renders embed MP4 chapters; `options.chapters:"off"` turns that off.
+- 23.976, 29.97 and 59.94 fps keep their exact rate in EDL, FCPXML and OTIO; 29.97 and 59.94 write drop-frame timecode.
+- `node cli.mjs studio <tool> --help` lists the arguments of a tool, and every top-level argument is a kebab-case flag.
+
 ## New in 0.11 — story documents (59 tools)
 
 - `studio_guide {topic:"story"}` returns the `aes.story/1` format with a complete example. `studio_apply {story, dryRun:true}`
@@ -149,6 +157,8 @@ and can make A/B projects with the other hooks (`variants:true`). Every step is 
 1. `studio_schema` → limits, operations, templates.
 2. `studio_create` (optional `template`: `shorts-hook`, `game-trailer`, `youtube-teaser`, `devlog`, `cinematic`, `square-post`)
    → `studio_analyze` → poll `studio_get` until `status` is `ready`.
+   A project made without a template has no `label` (top-right stamp) and no `endTitle` (end card / publish call to action);
+   only the `game-trailer` template sets `PRE-ALPHA FOOTAGE`. Pass `label` / `cta` explicitly if you want one.
 3. **See** the edit: `studio_timeline` (text) + `studio_storyboard` (one JPEG) + `studio_frame` for details.
 4. **Find** material: `studio_highlights`; **music**: `studio_beats`.
 5. **Change** with `studio_edit` — atomic batch, `dryRun: true` first when unsure:
@@ -180,7 +190,7 @@ and can make A/B projects with the other hooks (`variants:true`). Every step is 
    `square720`, `square`, `square1440`; 4:5 `portrait720`, `portrait`, `portrait1440`; `whatsapp` (720p, ≤ 16 MiB).
 8. Need a variant? `studio_duplicate` gives a sandbox or a vertical cut next to the master.
 9. Reuse a look: `studio_style {action:"save", name, projectId}` / `{action:"apply", name, projectId, revision}` / `{action:"list"}` —
-   the same named styles the editor shows. Captions from disk: `studio_captions_import {projectId, revision, file, sourceIndex}`.
+   the same named styles the editor shows. Captions from disk: `studio_captions_import {projectId, revision, file, sourceIndex}`, an SRT or a WebVTT file.
    Runtime check: `studio_doctor`. Detail frames: `studio_frame {…, size:"large"}` (1920 px).
 
 ## Rules the engine enforces (so you don't have to guess)

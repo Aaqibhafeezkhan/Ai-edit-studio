@@ -13,7 +13,7 @@ export const LANG = pickLanguage();
 export const LOCALE = LANG === 'nl' ? 'nl-NL' : 'en-GB';
 
 export const NL = {
- "DIRECTOR 0.11": "DIRECTOR 0.11",
+ "DIRECTOR 0.12": "DIRECTOR 0.12",
  "Speed up pauses ×2": "Pauzes ×2 versnellen",
  "Play pauses twice as fast instead of cutting them (without a transcript: the quiet stretches)": "Pauzes twee keer zo snel afspelen in plaats van wegknippen (zonder transcript: de stille stukken)",
  "Pauses sped up": "Pauzes versneld",
@@ -692,7 +692,7 @@ export const NL = {
  "Ripple delete (Delete)": "Ripple delete (Delete)",
  "Ripple delete (shot or I/O range)": "Ripple delete (shot of I/O-bereik)",
  "SHORTCUTS": "SNELTOETSEN",
- "SRT is too large (max. 128 KiB).": "SRT is te groot (maximaal 128 KiB).",
+ "The caption file is too large (max. 128 KiB).": "Het ondertitelbestand is te groot (maximaal 128 KiB).",
  "START FROM A TEMPLATE": "START MET EEN SJABLOON",
  "Saturation": "Verzadiging",
  "Save": "Bewaar",
@@ -796,7 +796,7 @@ export const NL = {
  "Undo / redo": "Ongedaan / opnieuw",
  "Undone": "Ongedaan gemaakt",
  "Updates live while you edit.": "Wordt live bijgewerkt terwijl je monteert.",
- "Use an SRT with the timing of this original source file.": "Gebruik een SRT met de tijden van dit oorspronkelijke bronbestand.",
+ "Use an SRT or VTT with the timing of this original source file.": "Gebruik een SRT of VTT met de tijden van dit oorspronkelijke bronbestand.",
  "Vibe-edit with your agent": "Vibe-edit met je agent",
  "View a source and set I/O": "Bekijk een bron en kies I/O",
  "Voice-over": "Voice-over",
@@ -831,7 +831,7 @@ export const NL = {
  "cool, subtle contrast": "koel, subtiel contrast",
  "cuts at the playhead,": "knipt bij de afspeelkop,",
  "double-click to remove": "dubbelklik om te verwijderen",
- "e.g. PRE-ALPHA FOOTAGE": "bijv. PRE-ALPHA FOOTAGE",
+ "e.g. WORK IN PROGRESS": "bijv. WERK IN UITVOERING",
  "e.g. Wishlist now": "bijv. Wishlist nu",
  "e.g. hook, landing, reveal": "bijv. hook, landing, reveal",
  "every 2nd": "om de 2",

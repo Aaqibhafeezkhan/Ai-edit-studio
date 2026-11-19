@@ -2,7 +2,7 @@
 // from a script, plan a multicam edit, and export EDL/FCPXML/OTIO/CSV/chapters/SRT/VTT.
 import { layout, totalDuration, mergeRanges, sectionSpans, applyOperations, LIMITS } from '../public/edit-ops.js';
 import { curvesFor, clipEnergy, highlights } from '../public/insights.js';
-import { findFillers, findPauses, wordsInEdit, bare } from '../public/transcript.js';
+import { findFillers, findPauses, wordsInEdit, bare, joinWords, splitWords } from '../public/transcript.js';
 import { mapCaptions, toSrt, toVtt } from '../public/captions.js';
 import { sentences } from './clips.mjs';
 
@@ -103,7 +103,9 @@ export function fitDuration({ clips, sources, transcripts = {}, target, protectH
 }
 
 // ------------------------------------------------------------------ search
-const tokens = text => String(text ?? '').split(/\s+/).map(bare).filter(Boolean);
+// CJK text has no spaces: use the same word segmentation as transcripts, so a
+// query typed as one phrase matches the words the transcript was split into.
+const tokens = text => splitWords(String(text ?? '')).map(bare).filter(Boolean);
 function editDistance(a, b, max) {
   if (Math.abs(a.length - b.length) > max) return max + 1;
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -158,7 +160,7 @@ export function searchProject({ clips, sources, options = {}, transcripts = {}, 
     const si = Number(key); if (!t?.words?.length) continue;
     const marked = wordsInEdit(t.words, clips, si);
     for (const h of searchWords(t.words, q, { limit })) {
-      const a = t.words[h.from], b = t.words[h.to], ctx = t.words.slice(Math.max(0, h.from - 6), h.to + 7).map(w => w.text).join(' ');
+      const a = t.words[h.from], b = t.words[h.to], ctx = joinWords(t.words.slice(Math.max(0, h.from - 6), h.to + 7).map(w => w.text));
       const inEdit = marked[h.from].inEdit;
       out.push({ kind: 'speech', score: h.score, sourceIndex: si, start: r3(a.start), end: r3(b.end), words: [h.from, h.to], text: ctx, inEdit,
         ...(inEdit ? { timeline: marked[h.from].timeline } : { insert: { op: 'insert', sourceIndex: si, start: r3(Math.max(0, a.start - 0.15)), end: r3(b.end + 0.25) } }) });
@@ -191,7 +193,7 @@ export function assembleFromScript({ script, transcripts, sources, minScore = 0.
         const a = t.words[h.from], b = t.words[h.to];
         const range = { start: Math.max(0, a.start - pad, h.from ? t.words[h.from - 1].end + 0.02 : 0), end: Math.min(sources[si]?.duration ?? Infinity, b.end + pad + 0.1, t.words[h.to + 1]?.start ?? Infinity) };
         if (used.some(u => u.si === si && Math.min(u.end, range.end) - Math.max(u.start, range.start) > 0)) continue;
-        if (!best || h.score > best.score) best = { si, ...range, score: h.score, text: t.words.slice(h.from, h.to + 1).map(w => w.text).join(' ') };
+        if (!best || h.score > best.score) best = { si, ...range, score: h.score, text: joinWords(t.words.slice(h.from, h.to + 1).map(w => w.text)) };
       }
     }
     if (!best || best.end - best.start < LIMITS.minSource) { unmatched.push({ line: k + 1, text: line }); return; }
@@ -247,12 +249,24 @@ export function multicamPlan({ sources, cams, from = 0, to, minShot = 2, maxShot
 
 // ------------------------------------------------------------------ timeline export
 const pad2 = n => String(n).padStart(2, '0');
+/** Exact rates as rationals (SMPTE): 29.97 is really 30000/1001, 23.976 is 24000/1001. */
+const FPS_RATES = new Map([[23.976, [24000, 1001]], [24, [24, 1]], [25, [25, 1]], [29.97, [30000, 1001]], [30, [30, 1]], [50, [50, 1]], [59.94, [60000, 1001]], [60, [60, 1]]]);
+const rateOf = fps => FPS_RATES.get(Number(fps)) ?? [Math.max(1, Math.round(Number(fps))) || 30, 1];
+/** SMPTE 12M drop-frame timecode for 29.97/59.94: frame numbers 0 and 1 (0–3 at 59.94) are skipped at the start of every minute except every tenth. */
+export function dropFrameTimecode(frames, base) {
+  const drop = base >= 60 ? 4 : 2, per10 = base * 600 - 9 * drop, perMin = base * 60 - drop;
+  const tens = Math.floor(frames / per10), rest = frames % per10;
+  const fn = frames + 9 * drop * tens + (rest > drop ? drop * Math.floor((rest - drop) / perMin) : 0);
+  const ff = fn % base, total = Math.floor(fn / base);
+  return `${pad2(Math.floor(total / 3600))}:${pad2(Math.floor(total / 60) % 60)}:${pad2(total % 60)};${pad2(ff)}`;
+}
 export function timecode(seconds, fps) {
-  const f = Math.round(seconds * fps), ff = f % fps, s = Math.floor(f / fps);
+  const [num, den] = rateOf(fps), base = Math.round(num / den);
+  const f = Math.round(seconds * num / den), ff = f % base, s = Math.floor(f / base);
   return `${pad2(Math.floor(s / 3600))}:${pad2(Math.floor(s / 60) % 60)}:${pad2(s % 60)}:${pad2(ff)}`;
 }
 const xml = v => String(v ?? '').replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
-const fileUrl = f => `file://${f.startsWith('/') ? '' : '/'}${encodeURI(f.replaceAll('\\', '/'))}`;
+const fileUrl = f => `file://${f.startsWith('/') ? '' : '/'}${encodeURI(f.replaceAll('\\', '/')).replace(/[#?]/g, c => encodeURIComponent(c))}`;
 /** Chapters shared by the chapters export and the MP4 render: sections first, else labelled markers.
  * `offset` is the length of a brand intro in front of the programme; the first chapter always starts at 0:00.
  * Marks at or past the end of the edit are dropped and each time gives one chapter, so 0 <= start < end <= programme end. */
@@ -275,6 +289,8 @@ export function chapterMetadata(chapters) {
 }
 export function exportTimeline({ format, clips, sources, options = {}, name = 'Edit', fps = 30 }) {
   const rows = layout(clips), sections = sectionSpans(clips, options.sections ?? []);
+  const [num, den] = rateOf(fps), base = Math.round(num / den);
+  const df = den !== 1 && (base === 30 || base === 60); // NTSC drop-frame rates (29.97, 59.94); 23.976 stays non-drop
   if (format === 'srt' || format === 'vtt') {
     const cues = mapCaptions(options.captions ?? [], clips, Number(options.captionOffset) || 0);
     if (!cues.length) throw new Error('No captions are available for this edit. Add or import captions before exporting SRT or VTT.');
@@ -283,19 +299,24 @@ export function exportTimeline({ format, clips, sources, options = {}, name = 'E
       : { extension: 'vtt', mime: 'text/vtt', content: toVtt(cues) };
   }
   if (format === 'edl') {
-    const lines = [`TITLE: ${name.replace(/[^\x20-\x7e]/g, '').slice(0, 60) || 'EDIT'}`, 'FCM: NON-DROP FRAME', ''];
+    const tc = s => df ? dropFrameTimecode(Math.round(s * num / den), base) : timecode(s, fps);
+    // The record hour is a whole hour of the timecode clock, not 3600 s of real time: only drop-frame rates
+    // turn 3600 s into 01:00:00;xx by seconds, so at non-drop rates the hour is a frame offset (base * 3600 frames).
+    const ndFrameTc = f => { const ff = f % base, t = Math.floor(f / base); return `${pad2(Math.floor(t / 3600))}:${pad2(Math.floor(t / 60) % 60)}:${pad2(t % 60)}:${pad2(ff)}`; };
+    const recTc = s => df ? tc(3600 + s) : ndFrameTc(base * 3600 + Math.round(s * num / den));
+    const lines = [`TITLE: ${name.replace(/[^\x20-\x7e]/g, '').slice(0, 60) || 'EDIT'}`, `FCM: ${df ? 'DROP FRAME' : 'NON-DROP FRAME'}`, ''];
     rows.forEach((r, i) => {
       const src = sources[r.sourceIndex], reel = `AX`, track = src?.hasAudio ? 'AA/V' : 'V   ';
       const recIn = 3600 + r.visibleStart, recOut = 3600 + r.visibleEnd;
       const srcIn = r.start + (r.visibleStart - r.timelineStart) * (r.speed || 1), srcOut = srcIn + (recOut - recIn) * (r.speed || 1);
-      lines.push(`${String(i + 1).padStart(3, '0')}  ${reel.padEnd(8)} ${track}  C        ${timecode(srcIn, fps)} ${timecode(srcOut, fps)} ${timecode(recIn, fps)} ${timecode(recOut, fps)}`);
-      if ((r.speed ?? 1) !== 1) lines.push(`M2   ${reel.padEnd(8)}     ${(fps * r.speed).toFixed(1).padStart(5, '0')}    ${timecode(srcIn, fps)}`);
+      lines.push(`${String(i + 1).padStart(3, '0')}  ${reel.padEnd(8)} ${track}  C        ${tc(srcIn)} ${tc(srcOut)} ${recTc(r.visibleStart)} ${recTc(r.visibleEnd)}`);
+      if ((r.speed ?? 1) !== 1) lines.push(`M2   ${reel.padEnd(8)}     ${(num / den * r.speed).toFixed(1).padStart(5, '0')}    ${tc(srcIn)}`);
       lines.push(`* FROM CLIP NAME: ${(src?.name ?? 'source').replace(/[^\x20-\x7e]/g, '_')}`);
       if (r.label) lines.push(`* COMMENT: ${r.label.replace(/[^\x20-\x7e]/g, '_')}`);
       if (r.transition && r.transition !== 'cut') lines.push(`* TRANSITION IN: ${r.transition} ${r.overlapIn.toFixed(2)} s (cut in this EDL)`);
       lines.push('');
     });
-    for (const m of options.markers ?? []) lines.push(`* MARKER ${timecode(3600 + m.time, fps)}: ${(m.label || '').replace(/[^\x20-\x7e]/g, '_')}`);
+    for (const m of options.markers ?? []) lines.push(`* MARKER ${recTc(m.time)}: ${(m.label || '').replace(/[^\x20-\x7e]/g, '_')}`);
     return { extension: 'edl', mime: 'text/plain', content: lines.join('\r\n') };
   }
   if (format === 'csv') {
@@ -312,7 +333,17 @@ export function exportTimeline({ format, clips, sources, options = {}, name = 'E
     if (!marks.length) marks.push({ start: 0, title: 'Intro' });
     const long = totalDuration(clips) >= 3600;
     const clock = t => (long ? `${Math.floor(t / 3600)}:${pad2(Math.floor(t / 60) % 60)}` : pad2(Math.floor(t / 60))) + `:${pad2(Math.floor(t % 60))}`;
-    return { extension: 'txt', mime: 'text/plain', content: marks.map(m => `${clock(m.start)} ${m.title}`).join('\n') };
+    // YouTube only shows a chapter list that starts at 0:00, has at least 3 chapters and keeps
+    // every chapter at least 10 s long. chapterMarks already pins the first chapter at 0:00;
+    // these warnings only say when the list breaks the other two rules and YouTube ignores it.
+    const warnings = [];
+    if (marks.length < 3) warnings.push(`YouTube needs at least 3 chapters; this list has ${marks.length}.`);
+    const total = totalDuration(clips);
+    for (let i = 0; i < marks.length; i++) {
+      const span = r3((marks[i + 1] ? marks[i + 1].start : total) - marks[i].start);
+      if (span < 10) warnings.push(`Chapter "${marks[i].title}" is ${span} s long; YouTube needs at least 10 s.`);
+    }
+    return { extension: 'txt', mime: 'text/plain', content: marks.map(m => `${clock(m.start)} ${m.title}`).join('\n'), warnings };
   }
   // Voice-over / multicam sound and music as separate audio (FCPXML connected clips, OTIO audio track).
   const total = totalDuration(clips);
@@ -320,32 +351,32 @@ export function exportTimeline({ format, clips, sources, options = {}, name = 'E
     options.narration ? { file: options.narration, name: 'Voice', at: Number(options.narrationStart) || 0, trim: Number(options.narrationTrimStart) || 0 } : null,
     options.music ? { file: options.music, name: 'Music', at: 0, trim: Number(options.musicTrimStart) || 0 } : null,
   ].filter(x => x && x.at < total).map(x => ({ ...x, duration: total - x.at }));
-  const frames = s => Math.round(s * fps);
+  const frames = s => Math.round(s * num / den); // integer rates keep den = 1, so nothing changes there
   if (format === 'fcpxml') {
     const used = [...new Set(rows.map(r => r.sourceIndex))];
-    const assets = used.map(i => { const s = sources[i]; return `    <asset id="a${i}" name="${xml(s.name)}" start="0s" duration="${frames(s.duration)}/${fps}s" hasVideo="1" hasAudio="${s.hasAudio ? 1 : 0}" format="r1"><media-rep kind="original-media" src="${xml(fileUrl(s.file))}"/></asset>`; }).join('\n');
+    const assets = used.map(i => { const s = sources[i]; return `    <asset id="a${i}" name="${xml(s.name)}" start="0s" duration="${frames(s.duration) * den}/${num}s" hasVideo="1" hasAudio="${s.hasAudio ? 1 : 0}" format="r1"><media-rep kind="original-media" src="${xml(fileUrl(s.file))}"/></asset>`; }).join('\n');
     const w = sources[used[0]]?.video?.width ?? 1920, h = sources[used[0]]?.video?.height ?? 1080;
     const spine = rows.map(r => {
       const off = frames(r.visibleStart), dur = Math.max(1, frames(r.visibleEnd) - off), st = frames(r.start + (r.visibleStart - r.timelineStart) * (r.speed || 1));
-      const speed = (r.speed ?? 1) !== 1 ? `<timeMap><timept time="0s" value="0s" interp="linear"/><timept time="${dur}/${fps}s" value="${Math.round(dur * r.speed)}/${fps}s" interp="linear"/></timeMap>` : '';
+      const speed = (r.speed ?? 1) !== 1 ? `<timeMap><timept time="0s" value="0s" interp="linear"/><timept time="${dur * den}/${num}s" value="${Math.round(dur * r.speed) * den}/${num}s" interp="linear"/></timeMap>` : '';
       const mute = r.gain === 0 ? '<adjust-volume amount="-96dB"/>' : '';
-      const connected = r.index === 0 ? extra.map((x, k) => `<asset-clip ref="x${k}" lane="-${k + 1}" name="${xml(x.name)}" offset="${st + frames(x.at)}/${fps}s" start="${frames(x.trim)}/${fps}s" duration="${frames(x.duration)}/${fps}s" audioRole="${k || !options.narration ? 'music' : 'dialogue'}"/>`).join('') : '';
-      return `          <asset-clip ref="a${r.sourceIndex}" name="${xml(r.label || sources[r.sourceIndex]?.name)}" offset="${off}/${fps}s" start="${st}/${fps}s" duration="${dur}/${fps}s">${speed}${mute}${connected}</asset-clip>`;
+      const connected = r.index === 0 ? extra.map((x, k) => `<asset-clip ref="x${k}" lane="-${k + 1}" name="${xml(x.name)}" offset="${(st + frames(x.at)) * den}/${num}s" start="${frames(x.trim) * den}/${num}s" duration="${frames(x.duration) * den}/${num}s" audioRole="${k || !options.narration ? 'music' : 'dialogue'}"/>`).join('') : '';
+      return `          <asset-clip ref="a${r.sourceIndex}" name="${xml(r.label || sources[r.sourceIndex]?.name)}" offset="${off * den}/${num}s" start="${st * den}/${num}s" duration="${dur * den}/${num}s">${speed}${mute}${connected}</asset-clip>`;
     }).join('\n');
-    const extraAssets = extra.map((x, k) => `\n    <asset id="x${k}" name="${xml(x.name)}" start="0s" duration="${frames(x.trim + x.duration)}/${fps}s" hasAudio="1" audioSources="1" audioChannels="2"><media-rep kind="original-media" src="${xml(fileUrl(x.file))}"/></asset>`).join('');
+    const extraAssets = extra.map((x, k) => `\n    <asset id="x${k}" name="${xml(x.name)}" start="0s" duration="${frames(x.trim + x.duration) * den}/${num}s" hasAudio="1" audioSources="1" audioChannels="2"><media-rep kind="original-media" src="${xml(fileUrl(x.file))}"/></asset>`).join('');
     const totalFrames = frames(total);
-    const markers = (options.markers ?? []).map(m => `          <marker start="${frames(m.time)}/${fps}s" duration="1/${fps}s" value="${xml(m.label)}"/>`).join('\n');
+    const markers = (options.markers ?? []).map(m => `          <marker start="${frames(m.time) * den}/${num}s" duration="${den}/${num}s" value="${xml(m.label)}"/>`).join('\n');
     const content = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
 <fcpxml version="1.9">
   <resources>
-    <format id="r1" frameDuration="1/${fps}s" width="${w}" height="${h}"/>
+    <format id="r1" frameDuration="${den}/${num}s" width="${w}" height="${h}"/>
 ${assets}${extraAssets}
   </resources>
   <library>
     <event name="AI Edit Studio">
       <project name="${xml(name)}">
-        <sequence format="r1" duration="${totalFrames}/${fps}s" tcStart="0s" tcFormat="NDF">
+        <sequence format="r1" duration="${totalFrames * den}/${num}s" tcStart="0s" tcFormat="${df ? 'DF' : 'NDF'}">
           <spine>
 ${spine}
           </spine>
@@ -359,7 +390,8 @@ ${markers}
     return { extension: 'fcpxml', mime: 'application/xml', content };
   }
   if (format === 'otio') {
-    const rt = s => ({ OTIO_SCHEMA: 'RationalTime.1', rate: fps, value: frames(s) });
+    const rate = num / den;
+    const rt = s => ({ OTIO_SCHEMA: 'RationalTime.1', rate, value: frames(s) });
     const tr = (a, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(a), duration: rt(d) });
     const clipItems = rows.map(r => ({
       OTIO_SCHEMA: 'Clip.2', name: r.label || sources[r.sourceIndex]?.name || 'clip', metadata: { aiEditStudio: { id: r.id, speed: r.speed ?? 1, transition: r.transition ?? 'cut' } },
@@ -368,11 +400,11 @@ ${markers}
       active_media_reference_key: 'DEFAULT_MEDIA', effects: [], markers: [], enabled: true,
     }));
     // A transition sits between two clips and takes no track time: each side uses half the overlap, in whole frames.
-    const rtFrames = value => ({ OTIO_SCHEMA: 'RationalTime.1', rate: fps, value });
+    const rtFrames = value => ({ OTIO_SCHEMA: 'RationalTime.1', rate, value });
     const children = [];
     let headUsed = 0; // frames the transition before the previous clip already takes from that clip
     rows.forEach((r, i) => {
-      const half = Math.round(r.overlapIn / 2 * fps);
+      const half = Math.round(r.overlapIn / 2 * num / den);
       const inFrames = i > 0 ? Math.min(half, Math.max(0, clipItems[i - 1].source_range.duration.value - headUsed)) : 0;
       const outFrames = Math.min(half, clipItems[i].source_range.duration.value);
       const cut = i > 0 && inFrames + outFrames > 0;
